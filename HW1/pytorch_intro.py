@@ -15,12 +15,8 @@ def create_tensor_of_pi(M: int, N: int) -> Tensor:
     Returns:
         x: A tensor of shape (M, N) filled with the value 3.14
     """
-    x = None
-    # --- Your code here
-
-
-
-    # ---
+    assert M > 0 and N > 0
+    x = torch.full((M, N), 3.14)
     return x
 
 
@@ -48,15 +44,10 @@ def slice_indexing_practice(x: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """
     assert x.shape[0] >= 3
     assert x.shape[1] >= 5
-    last_row = None
-    third_col = None
-    first_two_rows_three_cols = None
-    even_rows_odd_cols = None
-    # --- Your code here
-
-
-
-    # ---
+    last_row = x[-1, :]
+    third_col = x[:, 2].reshape(-1, 1)
+    first_two_rows_three_cols = x[:2, :3]
+    even_rows_odd_cols = x[::2, 1::2]
 
     out = (
         last_row,
@@ -93,11 +84,12 @@ def slice_assignment_practice(x: Tensor) -> Tensor:
     Returns:
         x
     """
-    # --- Your code here
+    assert x.shape[0] >= 4
+    assert x.shape[1] >= 6
+    x[:2, :3] = torch.tensor([[0, 1, 2], [0, 1, 2]])
+    x[:2, 3:6] = 2
 
-
-
-    # ---
+    x[2:4, :6] = torch.tensor([[3, 4, 3, 4, 5, 5], [3, 4, 3, 4, 5, 5]])
     return x
 
 
@@ -117,12 +109,10 @@ def shuffle_cols(x: Tensor) -> Tensor:
         - The third column of y is the same as the third column of x
         - The fourth column of y is the same as the second column of x
     """
-    y = None
-    # --- Your code here
+    assert x.shape[1] >= 3
+    y = torch.zeros((x.shape[0], 4))
+    y[:, :4] = x[:, [0, 0, 2, 1]]
 
-
-
-    # ---
     return y[:, :4]
 
 
@@ -142,12 +132,7 @@ def reverse_rows(x: Tensor) -> Tensor:
             the second row of y should be equal to the second to last row of x,
             and so on.
     """
-    y = None
-    # --- Your code here
-
-
-
-    # ---
+    y = torch.flip(x, dims=[0])
     return y
 
 
@@ -170,12 +155,11 @@ def reshape_practice(x: Tensor) -> Tensor:
     Returns:
         y: A reshaped version of x of shape (3, 8) as described above.
     """
-    y = None
-    # --- Your code here
+    assert x.shape == (24,)
+    x_reshaped = torch.reshape(x, (2, 3, 4))  # (2, 3, 4)
+    x_transposed = torch.transpose(x_reshaped, 0, 1)  # (3, 2, 4)
+    y = torch.reshape(x_transposed, (3, 8))
 
-
-
-    # ---
     return y
 
 
@@ -201,8 +185,6 @@ def batched_matrix_multiply(x: Tensor, y: Tensor) -> Tensor:
     z = None
     # --- Your code here
 
-
-
     # ---
     return z
 
@@ -222,8 +204,6 @@ def compute_scalar_function_and_grad(x: Tensor) -> Tensor:
     """
     y = None
     # --- Your code here
-
-
 
     # ---
     return y
@@ -248,8 +228,6 @@ def compute_vector_function_and_grad(x: Tensor) -> Tensor:
     """
     y = None
     # --- Your code here
-
-
 
     # ---
     return y
@@ -276,8 +254,6 @@ def compute_scalar_function_and_partial_grad(x: Tensor, y: Tensor) -> Tensor:
     z = None
     # --- Your code here
 
-
-
     # ---
     return z
 
@@ -296,8 +272,6 @@ def compute_forward_kinematics(thetas: torch.Tensor) -> torch.Tensor:
     x = None
     # --- Your code here
 
-
-
     # ---
     return x
 
@@ -313,8 +287,6 @@ def compute_jacobian(thetas: torch.Tensor) -> torch.Tensor:
     """
     J = None
     # --- Your code here
-
-
 
     # ---
     return J
