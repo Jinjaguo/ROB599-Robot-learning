@@ -182,10 +182,11 @@ def batched_matrix_multiply(x: Tensor, y: Tensor) -> Tensor:
             of matrix multiplication between x[i] of shape (N, M) and y[i] of
             shape (M, P). The output z should have the same dtype as x.
     """
-    z = None
-    # --- Your code here
+    x = x.view(-1, x.shape[1], x.shape[2])
+    y = y.view(-1, y.shape[1], y.shape[2])
+    z = torch.bmm(x, y)
+    z = z.view(x.shape[0], x.shape[1], y.shape[2])
 
-    # ---
     return z
 
 
@@ -202,10 +203,10 @@ def compute_scalar_function_and_grad(x: Tensor) -> Tensor:
         y: Tensor of shape (1) as described above. It should have the same
             dtype as the input x.
     """
-    y = None
-    # --- Your code here
+    x.requires_grad_(True)
 
-    # ---
+    y = 3 * x ** 2
+    y.backward()
     return y
 
 
@@ -226,10 +227,13 @@ def compute_vector_function_and_grad(x: Tensor) -> Tensor:
         y: Tensor of shape (2) as described above. It should have the same
             dtype as the input x.
     """
-    y = None
-    # --- Your code here
+    x.requires_grad_(True)
+    x1, x2 = x[0], x[1]
+    y1 = torch.cos(2 * x1 + x2)
+    y2 = torch.sin(2 * x2 - x1)
+    y = torch.stack([y1, y2])
+    y.backward(torch.ones_like(y))
 
-    # ---
     return y
 
 
@@ -251,10 +255,10 @@ def compute_scalar_function_and_partial_grad(x: Tensor, y: Tensor) -> Tensor:
         z: Tensor of shape (1) as described above. It should have the same
             dtype as the input x.
     """
-    z = None
-    # --- Your code here
+    x.requires_grad_(True)
+    z = x ** 0.5 * y.detach()  # using detach() to cut the chain
+    z.backward()
 
-    # ---
     return z
 
 
@@ -269,10 +273,13 @@ def compute_forward_kinematics(thetas: torch.Tensor) -> torch.Tensor:
     """
     L1 = 2
     L2 = 1
-    x = None
-    # --- Your code here
+    theta1, theta2 = thetas[0], thetas[1]
 
-    # ---
+    x1 = L1 * torch.cos(theta1) + L2 * torch.cos(theta1 + theta2)
+    x2 = L1 * torch.sin(theta1) + L2 * torch.sin(theta1 + theta2)
+
+    x = torch.stack([x1, x2])
+
     return x
 
 
@@ -285,8 +292,18 @@ def compute_jacobian(thetas: torch.Tensor) -> torch.Tensor:
         J: Pytorch Tensor of shape (2,2) containing the end-effector position
 
     """
-    J = None
-    # --- Your code here
+    thetas.requires_grad_(True)
+    x = compute_forward_kinematics(thetas)
 
-    # ---
+    J = torch.zeros((2, 2))
+
+    for i in range(2):
+        grad_x = torch.zeros_like(x)
+        grad_x[i] = 1
+        x.backward(grad_x, retain_graph=True)
+
+        J[i, :] = thetas.grad
+
+        thetas.grad.zero_()
+
     return J
