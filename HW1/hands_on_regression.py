@@ -114,20 +114,15 @@ class LinearRegressor(nn.Module):
         super().__init__()
         self.num_in_feats = num_in_feats  # number of regression input features
         # Define trainable
-        self.coeffs = None  # TODO: Override with the learnable regression coefficients
-        # --- Your code here
-
-        # ---
+        self.coeffs = nn.Linear(num_in_feats, 1, bias=False)
 
     def forward(self, x):
         """
         :param x: Tensor of size (N, num_in_feats)
         :return: y_hat: Tensor of size (N, 1)
         """
-        y_hat = None
-        # --- Your code here
+        y_hat = self.coeffs(x)
 
-        # ---
         return y_hat
 
     def get_coeffs(self):
