@@ -7,6 +7,22 @@ import torch.optim as optim
 from torch.autograd import Variable
 from tqdm import tqdm
 
+import matplotlib.pyplot as plt
+import numpy as np
+
+train_data_path = './regression_training_data.npz'
+val_data_path = "./regression_validation_data.npz"
+
+train_data = np.load(train_data_path)
+val_data = np.load(val_data_path)
+
+# Unpack the data
+xs = torch.from_numpy(train_data['x'])[:, None]  # shape (N, 1)
+ys = torch.from_numpy(train_data['y'])[:, None]  # shape (N, 1)
+
+xs_val = torch.from_numpy(val_data['x'])[:, None]  # shape (N, 1)
+ys_val = torch.from_numpy(val_data['y'])[:, None]  # shape (N, 1)
+
 
 ##############################################################################
 # HANDS ON REGRESSION
@@ -22,12 +38,14 @@ def polynomial_basis_functions(xs: Tensor, d: int) -> Tensor:
         Xs: torch.Tensor of shape (N, d*num_feats) containing the basis functions for the
         i.e. [1, x, x**2, x**3,...., x**d]
     """
-    Xs = None
-    # --- Your code here
+    N, num_feats = xs.shape
 
+    Xs = torch.zeros((N, (d + 1) * num_feats), dtype=xs.dtype)
 
+    for feat in range(num_feats):
+        for power in range(d + 1):
+            Xs[:, feat * (d + 1) + power] = xs[:, feat] ** power
 
-    # ---
     return Xs
 
 
@@ -44,24 +62,20 @@ def compute_least_squares_solution(Xs: Tensor, ys: Tensor) -> Tensor:
     matrix inverses are a costly operation. Instead, given a linear system Ax = b,
     the solution can be computed much more efficient as x = torch.linalg.solve(A, b)
     """
-    coeffs = None
-    # --- Your code here
+    XTX = Xs.T @ Xs  # (m, m)
+    XTy = Xs.T @ ys  # (m, 1)
+    coeffs = torch.linalg.solve(XTX, XTy)
 
-
-
-    # ---
+    coeffs = coeffs.squeeze()
 
     return coeffs
 
 
 def get_normalization_constants(Xs: Tensor) -> Tuple:
-    mean_i = None
-    std_i = None
-    # --- Your code here
 
+    mean_i = torch.mean(Xs, dim=0)
+    std_i = torch.std(Xs, dim=0)
 
-
-    # ---
     return mean_i, std_i
 
 
@@ -71,13 +85,9 @@ def normalize_tensor(Xs: Tensor, mean_i: Tensor, std_i: Tensor) -> Tensor:
     :param Xs: torch.Tensor of shape (batch_size, num_features)
     :return: Normalized version of Xs
     """
-    Xs_norm = None
-    # --- Your code here
+    Xs_norm = (Xs - mean_i) / std_i
 
-
-
-    # ---
-    Xs_norm = torch.nan_to_num(Xs_norm, nan=0.0) # avoid NaNs.
+    Xs_norm = torch.nan_to_num(Xs_norm, nan=0.0)  # avoid NaNs.
     return Xs_norm
 
 
@@ -87,12 +97,8 @@ def denormalize_tensor(Xs_norm: Tensor, mean_i: Tensor, std_i: Tensor) -> Tensor
         :param Xs: torch.Tensor of shape (batch_size, num_features)
         :return: Normalized version of Xs
         """
-    Xs_denorm = None
-    # --- Your code here
+    Xs_denorm = Xs_norm * std_i + mean_i
 
-
-
-    # ---
     return Xs_denorm
 
 
@@ -103,14 +109,13 @@ class LinearRegressor(nn.Module):
     The network regression output is one-dimensional.
 
     """
+
     def __init__(self, num_in_feats):
         super().__init__()
-        self.num_in_feats = num_in_feats # number of regression input features
+        self.num_in_feats = num_in_feats  # number of regression input features
         # Define trainable
-        self.coeffs = None # TODO: Override with the learnable regression coefficients
+        self.coeffs = None  # TODO: Override with the learnable regression coefficients
         # --- Your code here
-
-
 
         # ---
 
@@ -121,8 +126,6 @@ class LinearRegressor(nn.Module):
         """
         y_hat = None
         # --- Your code here
-
-
 
         # ---
         return y_hat
@@ -138,25 +141,23 @@ class GeneralNN(nn.Module):
     The network hidden sizes are 100 and 100.
     Activations are Tanh
     """
+
     def __init__(self):
         super().__init__()
-        # --- Your code here
-
-
-
-        # ---
+        self.model = nn.Sequential(
+            nn.Linear(1, 100),
+            nn.Tanh(),
+            nn.Linear(100, 100),
+            nn.Tanh(),
+            nn.Linear(100, 1)
+        )
 
     def forward(self, x):
         """
         :param x: Tensor of size (N, 1)
         :return: y_hat: Tensor of size (N, 1)
         """
-        y_hat = None
-        # --- Your code here
-
-
-
-        # ---
+        y_hat = self.model(x)
         return y_hat
 
 
@@ -169,21 +170,22 @@ def train_step(model, train_loader, optimizer) -> float:
     :return: train_loss <float> representing the average loss among the different mini-batches.
         Loss needs to be MSE loss.
     """
-    train_loss = 0. # TODO: Modify the value
+    train_loss = 0.  # TODO: Modify the value
     # Initialize the train loop
-    # --- Your code here
+    model.train()
+    loss_fn = nn.MSELoss()
 
-
-
-    # ---
     for batch_idx, (data, target) in enumerate(train_loader):
-        # --- Your code here
+        data, target = data.float(), target.float()
+        optimizer.zero_grad()
 
+        y_pred = model(data)
+        loss = loss_fn(y_pred, target)
+        loss.backward()
+        optimizer.step()
 
-
-        # ---
         train_loss += loss.item()
-    return train_loss/len(train_loader)
+    return train_loss / len(train_loader)
 
 
 def val_step(model, val_loader) -> float:
@@ -194,22 +196,19 @@ def val_step(model, val_loader) -> float:
     :param optimizer: Pytorch optimizer
     :return: val_loss <float> representing the average loss among the different mini-batches
     """
-    val_loss = 0. # TODO: Modify the value
+    val_loss = 0.  # TODO: Modify the value
     # Initialize the validation loop
-    # --- Your code here
+    model.eval()
+    loss_fn = nn.MSELoss()
 
+    with torch.no_grad():
+        for batch_idx, (data, target) in enumerate(val_loader):
+            data, target = data.float(), target.float()
+            y_pred = model(data)
+            loss = loss_fn(y_pred, target)
+            val_loss += loss.item()
 
-
-    # ---
-    for batch_idx, (data, target) in enumerate(val_loader):
-        loss = None
-        # --- Your code here
-
-
-
-        # ---
-        val_loss += loss.item()
-    return val_loss/len(val_loader)
+    return val_loss / len(val_loader)
 
 
 def train_model(model, train_dataloader, val_dataloader, num_epochs=100, lr=1e-3):
@@ -223,28 +222,19 @@ def train_model(model, train_dataloader, val_dataloader, num_epochs=100, lr=1e-3
     :param lr: <float> learning rate for the weight update.
     :return:
     """
-    optimizer = None
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     # Initialize the optimizer
-    # --- Your code here
 
-
-
-    # ---
     pbar = tqdm(range(num_epochs))
     train_losses = []
     val_losses = []
+
     for epoch_i in pbar:
-        train_loss_i = None
-        val_loss_i = None
-        # --- Your code here
+        train_loss_i = train_step(model, train_dataloader, optimizer)
+        val_loss_i = val_step(model, val_dataloader)
 
-
-
-        # ---
-        pbar.set_description(f'Train Loss: {train_loss_i:.4f} | Validation Loss: {val_loss_i:.4f}')
+        pbar.set_description(
+            f'Epoch {epoch_i + 1}/{num_epochs} | Train Loss: {train_loss_i:.4f} | Val Loss: {val_loss_i:.4f}')
         train_losses.append(train_loss_i)
         val_losses.append(val_loss_i)
     return train_losses, val_losses
-
-
-

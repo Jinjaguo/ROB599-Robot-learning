@@ -10,21 +10,15 @@ class MLP(nn.Module):
     """
     def __init__(self):
         super().__init__()
-        # --- Your code here
-
-
-
-        # ---
+        self.model = nn.Sequential(
+            nn.Linear(3, 128),
+            nn.Linear(128, 2)
+        )
 
     def forward(self, x):
         """
         :param x: Tensor of size (N, 3)
         :return: y_hat: Tensor of size (N, 2)
         """
-        y_hat = None
-        # --- Your code here
-
-
-
-        # ---
+        y_hat = self.model(x)
         return y_hat
