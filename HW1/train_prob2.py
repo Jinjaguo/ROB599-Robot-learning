@@ -122,3 +122,52 @@ plt.plot(x_nn, y_nn, color='orange', label='NN regression solution')
 plt.grid()
 plt.legend()
 plt.show()
+
+LR = 1e-2
+NUM_EPOCHS = 15000
+
+# Initialize the model
+general_nn = GeneralNN()
+
+# Create dataset without polynomial basis functions:
+train_dataset = SimpleDataset(xs, ys)
+val_dataset = SimpleDataset(xs_val, ys_val)
+
+# Create DataLoaders
+train_loader = DataLoader(train_dataset, batch_size=len(train_dataset))
+val_loader = DataLoader(val_dataset, batch_size=len(val_dataset))
+
+# Train the model
+train_losses, val_losses = train_model(general_nn, train_loader, val_loader, num_epochs=NUM_EPOCHS, lr=LR)
+
+# plot train loss and test loss:
+fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 3))
+axes[0].plot(train_losses)
+axes[0].grid()
+axes[0].set_title('Train Loss')
+axes[0].set_xlabel('Epochs')
+axes[0].set_ylabel('Train Loss')
+axes[0].set_yscale('log')
+axes[1].plot(val_losses)
+axes[1].grid()
+axes[1].set_title('Validation Loss')
+axes[1].set_xlabel('Epochs')
+axes[1].set_ylabel('Validation Loss')
+axes[1].set_yscale('log')
+
+save_path = os.path.join('./general_nn.pt')
+torch.save(general_nn.state_dict(), save_path)
+
+x_nn = torch.linspace(-5, 5, 1000, dtype=torch.float32)[:, None]
+X_nn = x_nn
+
+# Call the method
+y_nn = general_nn(X_nn).cpu().detach()
+
+# Plot the data to evaluate the fit.
+plt.scatter(xs, ys, color='b', label='train_data')
+plt.scatter(xs_val, ys_val, color='g', label='val_data')
+plt.plot(x_nn, y_nn, color='orange', label='general nn solution')
+plt.grid()
+plt.legend()
+plt.show()
