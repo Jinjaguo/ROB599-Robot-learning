@@ -7,22 +7,6 @@ import torch.optim as optim
 from torch.autograd import Variable
 from tqdm import tqdm
 
-import matplotlib.pyplot as plt
-import numpy as np
-
-train_data_path = './regression_training_data.npz'
-val_data_path = "./regression_validation_data.npz"
-
-train_data = np.load(train_data_path)
-val_data = np.load(val_data_path)
-
-# Unpack the data
-xs = torch.from_numpy(train_data['x'])[:, None]  # shape (N, 1)
-ys = torch.from_numpy(train_data['y'])[:, None]  # shape (N, 1)
-
-xs_val = torch.from_numpy(val_data['x'])[:, None]  # shape (N, 1)
-ys_val = torch.from_numpy(val_data['y'])[:, None]  # shape (N, 1)
-
 
 ##############################################################################
 # HANDS ON REGRESSION
