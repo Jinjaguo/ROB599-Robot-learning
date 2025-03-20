@@ -107,7 +107,8 @@ class MPPIController(object):
          TIP 2: At most you need only 1 for loop.
         """
         state = state_0.unsqueeze(0).repeat(self.K, 1) # transform it to (K, state_size)
-        trajectory = None
+        trajectory = torch.zeros((self.K, self.T + 1, self.state_size))
+
         temp_state = state.clone()
         trajectory[:, 0, :] = temp_state
         for i in range(self.T):
@@ -132,8 +133,7 @@ class MPPIController(object):
         TIP 1: the nominal actions (without perturbation) are stored in self.U
         TIP 2: Check Algorithm 2 in https://ieeexplore.ieee.org/document/7989202 for more references.
         """
-        total_trajectory_cost = None
-        K, T, state_size = trajectory.shape
+
         state_cost = (trajectory - self.goal_state) @ self.Q @ (trajectory - self.goal_state).permute(0, 2, 1)
         state_cost = state_cost.diagonal(dim1=1, dim2=2).sum(dim=1)
 
