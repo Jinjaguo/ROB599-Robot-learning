@@ -306,10 +306,9 @@ class MultiStepLoss(nn.Module):
         """
         Compute the multi-step loss resultant of multi-querying the model from (state, action) and comparing the predictions with targets.
         """
-        multi_step_loss = None
+        multi_step_loss = 0
         # --- Your code here
         num_steps = state.shape[1]
-        current_state = state.clone()
 
         for step in range(num_steps):
             state = model(state, actions[:, step, :])
@@ -328,15 +327,15 @@ class AbsoluteDynamicsModel(nn.Module):
         super().__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
-        hidden_dim = 64
         # --- Your code here
-        self.network = nn.Sequential(
-            nn.Linear(state_dim + action_dim, hidden_dim),
+        self.layers = nn.Sequential(
+            nn.Linear(self.state_dim + self.action_dim, 100),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(100, 100),
             nn.ReLU(),
-            nn.Linear(hidden_dim, state_dim)
+            nn.Linear(100, self.state_dim)
         )
+
         # ---
 
     def forward(self, state, action):
@@ -348,8 +347,7 @@ class AbsoluteDynamicsModel(nn.Module):
         """
         next_state = None
         # --- Your code here
-        combined_input = torch.cat([state, action], dim=-1)
-        next_state = self.network(combined_input)
+        next_state = self.layers(torch.cat([state, action], dim=-1))
         # ---
         return next_state
 
@@ -366,14 +364,14 @@ class ResidualDynamicsModel(nn.Module):
         self.state_dim = state_dim
         self.action_dim = action_dim
         # --- Your code here
-        hidden_dim = 64
-        self.network = nn.Sequential(
-            nn.Linear(self.state_dim + self.action_dim, hidden_dim),
+        self.layers = nn.Sequential(
+            nn.Linear(self.state_dim + self.action_dim, 100),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(100, 100),
             nn.ReLU(),
-            nn.Linear(hidden_dim, self.state_dim)
+            nn.Linear(100, self.state_dim)
         )
+
         # ---
 
     def forward(self, state, action):
@@ -385,8 +383,7 @@ class ResidualDynamicsModel(nn.Module):
         """
         next_state = None
         # --- Your code here
-        combined_input = torch.cat([state, action], dim=-1)
-        delta = self.network(combined_input)
+        delta = self.layers(torch.cat((state, action), dim=-1))
         next_state = state + delta
         # ---
         return next_state
@@ -404,7 +401,7 @@ def free_pushing_cost_function(state, action):
     # --- Your code here
     state_error = state - target_pose
     Q = torch.diag(torch.tensor([1.0, 1.0, 0.1], dtype=torch.float32))
-    cost = torch.sum(state_error @ Q * state_error, dim=1)  # torch.einsum('bi,ij,bj->b', state_error, Q, state_error)
+    cost = torch.sum(state_error @ Q @ state_error.t(), dim=1)  # torch.einsum('bi,ij,bj->b', state_error, Q, state_error)
     # ---
     return cost
 
@@ -450,14 +447,14 @@ def obstacle_avoidance_pushing_cost_function(state, action):
     target_pose = TARGET_POSE_OBSTACLES_TENSOR  # torch tensor of shape (3,) containing (pose_x, pose_y, pose_theta)
     cost = None
     # --- Your code here
-    collision_penalty = 80  # penalty for collision with obstacle
+    collision_penalty = 100  # penalty for collision with obstacle
     state_error = state - target_pose
     Q = torch.diag(torch.tensor([1.0, 1.0, 0.1], dtype=torch.float32))
-    state_cost = torch.sum(state_error @ Q * state_error, dim=1)
+    state_cost = torch.sum(state_error @ Q @ state_error.t(), dim=1) + 100 * collision_detection(state)
     collision_cost = collision_penalty * collision_detection(state)
     total_cost = state_cost + collision_cost
     # ---
-    return cost
+    return total_cost
 
 
 class PushingController(object):
@@ -476,7 +473,7 @@ class PushingController(object):
         state_dim = env.observation_space.shape[0]
         u_min = torch.from_numpy(env.action_space.low)
         u_max = torch.from_numpy(env.action_space.high)
-        noise_sigma = 0.4 * torch.eye(env.action_space.shape[0])
+        noise_sigma = 1 * torch.eye(env.action_space.shape[0])
         lambda_value = 0.01
         # ---
         from mppi import MPPI
@@ -516,12 +513,10 @@ class PushingController(object):
         state_tensor = None
         # --- Your code here
         state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
-        # ---
-        action_tensor = self.mppi.command(state_tensor)
         # --- Your code here
         action_tensor = self.mppi.command(state_tensor).squeeze(0).detach().numpy()
         # ---
-        return action
+        return action_tensor
 
 # =========== AUXILIARY FUNCTIONS AND CLASSES HERE ===========
 # --- Your code here
