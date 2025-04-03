@@ -287,7 +287,8 @@ class PushingDynamicsGP(PushingDynamics):
         """
         pred = None
         # --- Your code here
-
+        u = torch.cat((state, action), dim=1)
+        pred = self.gp_model(u)
         # ---
         return pred
 
@@ -337,7 +338,10 @@ class PushingDynamicsGP(PushingDynamics):
         A = self.gp_model.grad_mu(torch.cat((mu, action), dim=-1))[:, :, :2]  # want B x 2 x 2
 
         # --- Your code here
-
+        A = A[:, :, :2]
+        pred_mu, pred_sigma = self.predict(mu, action)
+        propagated_cov = torch.bmm(torch.bmm(A, sigma), A.transpose(-1, -2))
+        pred_sigma = pred_sigma + propagated_cov
         # ---
         return pred_mu, pred_sigma
 
@@ -354,7 +358,14 @@ class ResidualDynamicsModel(nn.Module):
         self.state_dim = state_dim
         self.action_dim = action_dim
         # --- Your code here
-
+        u_dim = state_dim + action_dim
+        self.layers = nn.Sequential(
+            nn.Linear(u_dim, 100),
+            nn.ReLU(),
+            nn.Linear(100, 100),
+            nn.ReLU(),
+            nn.Linear(100, self.state_dim)
+        )
         # ---
 
     def forward(self, state, action):
@@ -366,7 +377,9 @@ class ResidualDynamicsModel(nn.Module):
         """
         next_state = None
         # --- Your code here
-
+        u = torch.cat((state, action), dim=-1)
+        delta = self.layers(u)
+        next_state = state + delta
         # ---
         return next_state
 
@@ -394,6 +407,10 @@ class DynamicsNNEnsemble(PushingDynamics):
         """
         next_state = None
         # --- Your code here
+        batch, dx = state.shape
+        next_state = torch.zeros(batch, len(self.models), dx)
+        for idx, model in enumerate(self.models):
+            next_state[:, idx, :] = model(state, action)
 
         # ---
         return next_state
@@ -415,7 +432,14 @@ class DynamicsNNEnsemble(PushingDynamics):
         """
         pred_mu, pred_sigma = None, None
         # --- Your code here
+        batch, dx = state.shape
+        points = torch.zeros(batch, len(self.models), dx)
 
+        for idx, model in enumerate(self.models):
+            points[:, idx, :] = model(state=state, action=action)
+
+        pred_mu = points.mean(dim=1)
+        pred_sigma = batch_cov(points=points)
         # ---
         return pred_mu, pred_sigma
 
@@ -433,7 +457,23 @@ def train_dynamics_gp_hyperparams(model, likelihood, train_states, train_actions
 
     """
     # --- Your code here
+    model.train()
+    likelihood.train()
 
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+    gp = model.gp_model if hasattr(model, 'gp_model') else model
+    mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, gp)
+
+    for i in range(100):
+        optimizer.zero_grad()
+        output = model(train_states, train_actions)  # 模型封装处理输入
+        loss = -mll(output, train_next_states)
+        loss.backward()
+        optimizer.step()
+
+        if (i + 1) % 10 == 0 or i == 0:
+            print(f'Iter {i + 1}/100 - Loss: {loss.item():.4f}')
     # ---
 
 
@@ -447,7 +487,9 @@ def free_pushing_cost_function(state, action):
     target_pose = TARGET_POSE_FREE_TENSOR  # torch tensor of shape (3,) containing (pose_x, pose_y, pose_theta)
     cost = None
     # --- Your code here
-
+    sigma = state[:, 2:].reshape(-1, 2, 2)
+    trace = sigma.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+    cost = torch.sum((state[:, :2] - target_pose) * (state[:, :2] - target_pose), dim=1) + trace
     # ---
     return cost
 
@@ -467,7 +509,16 @@ def obstacle_avoidance_pushing_cost_function(state, action):
     disk_radius = DISK_RADIUS
     cost = None
     # --- Your code here
+    cost = torch.zeros(state.shape[0])
+    for i in range(state.shape[0]):
 
+        state_mean = state[i, :2]
+        state_cov = state[i, 2:].view(2, 2)
+        diff = state_mean - target_pose
+        cost[i] = torch.mm(diff.view(1, 2), diff.view(2, 1)) + torch.trace(state_cov)
+        dis = torch.norm(state_mean[:2] - obs_centre)
+        if dis < (obs_radius + disk_radius):
+            cost[i] += 100.0
     # ---
     return cost
 
@@ -487,7 +538,17 @@ def obstacle_avoidance_pushing_cost_function_samples(state, action, K=10):
     disk_radius = DISK_RADIUS
     cost = None
     # --- Your code here
+    mu = state[:, :2]
+    Sigma = state[:, 2:].view(-1, 2, 2)
 
+    samples = torch.distributions.multivariate_normal.MultivariateNormal(mu, Sigma).sample((K,))
+    in_collision = ((samples - obs_centre) ** 2).sum(dim=-1) < (obs_radius + disk_radius) ** 2
+    collision_cost = 100 * in_collision.float().mean(dim=0)
+
+    distance_cost = ((mu - target_pose) ** 2).sum(dim=-1)
+
+    trace_cost = torch.sum(Sigma.reshape(Sigma.shape[0], -1), dim=-1)
+    cost = distance_cost + trace_cost + collision_cost
     # ---
     return cost
 
@@ -533,7 +594,16 @@ class PushingController(object):
         """
         next_state = None
         # --- Your code here
+        state_mu = state[:, :self.env.observation_space.shape[0]]  # (B=100,2)
+        state_sigma = state[:, self.env.observation_space.shape[0]:].reshape(-1, self.env.observation_space.shape[0],
+                                                                             self.env.observation_space.shape[
+                                                                                 0])  # (B=100,2,2)
 
+        next_state_mu, next_state_sigma = self.model.propagate_uncertainty(state_mu, state_sigma, action)
+
+        next_state_sigma = next_state_sigma.reshape(-1, self.env.observation_space.shape[0] ** 2)
+
+        next_state = torch.cat([next_state_mu, next_state_sigma], dim=-1)
         # ---
         return next_state
 
@@ -552,10 +622,12 @@ class PushingController(object):
         action = None
         state_tensor = None
         # --- Your code here
-
+        state_tensor = torch.zeros(1, self.env.observation_space.shape[0] + self.env.observation_space.shape[0] ** 2)
+        state_tensor[:, :self.env.observation_space.shape[0]] = torch.from_numpy(state)
+        state_tensor[:, self.env.observation_space.shape[0]:] = torch.zeros(self.env.observation_space.shape[0] ** 2)
         # ---
         action_tensor = self.mppi.command(state_tensor)
         # --- Your code here
-
+        action = action_tensor.detach().numpy().reshape(-1)
         # ---
         return action
