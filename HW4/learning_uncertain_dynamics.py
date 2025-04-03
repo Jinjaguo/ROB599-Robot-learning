@@ -78,14 +78,9 @@ class MultitaskGPModel(gpytorch.models.ExactGP):
         self.mean_module = None
         self.covar_module = None
         # --- Your code here
-        num_tasks = train_y.shape[2]
-        input_dim = train_x.shape[2]
-
-        self.mean_module = ResidualMean(batch_shape=torch.Size([num_tasks]))
+        self.mean_module = ResidualMean(batch_shape=torch.Size([2]))
         self.covar_module = gpytorch.kernels.ScaleKernel(
-            gpytorch.kernels.RBFKernel(ard_num_dims=input_dim, batch_shape=torch.Size([num_tasks])),
-            batch_shape=torch.Size([num_tasks])
-        )
+            gpytorch.kernels.RBFKernel(ard_num_dims=5, batch_shape=torch.Size([2])), batch_shape=torch.Size([2]))
         # ---
 
     def forward(self, x):
