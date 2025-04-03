@@ -211,30 +211,28 @@ class PushingDynamics(nn.Module):
             pred_sigma: torch.tensor of shape (N, dx, dx) consisting of covariance matrix of predicted state distribution
 
         """
-
-        pred_mu, pred_sigma = None, None
-
         # --- Your code here
         N, dx = mu.shape
-        du = action.shape[1]
-        if torch.all(sigma == 0):
-            return self.predict(mu, action)
+        # somehow need to get points inorder to use batch_conv
+        points = torch.zeros((N, K, dx))
+        flag = torch.count_nonzero(sigma)
+        if flag == 0:
+            pred_mu, pred_sigma = self.predict(state=mu, action=action)
+        else:
+            dist = MultivariateNormal(mu, covariance_matrix=sigma)
+            samples = dist.sample((K,))
+            for k in range(K):
+                next_mu, next_sig = self.predict(state=samples[k], action=action)
+                flag_k = torch.count_nonzero(next_sig)
+                if flag_k == 0:
+                    points[:, k, :] = next_mu
+                else:
+                    dist = MultivariateNormal(next_mu, covariance_matrix=next_sig)
+                    points[:, k, :] = dist.sample()
+            pred_mu = points.mean(dim=1)
+            pred_sigma = batch_cov(points=points)
 
-        samples = torch.stack([
-            MultivariateNormal(mu[i], sigma[i]).sample((K,))
-            for i in range(N)], dim=0)
-
-        samples_flat = samples.view(N * K, dx)
-        actions_repeated = action.unsqueeze(1).expand(N, K, du).reshape(N * K, du)
-
-        pred_mu_flat, _ = self.predict(samples_flat, actions_repeated)
-        pred_mu = pred_mu_flat.view(N, K, dx)
-
-        pred_mu_mean = pred_mu.mean(dim=1)
-        pred_sigma = batch_cov(pred_mu)
-        # ---
-
-        return pred_mu_mean, pred_sigma
+        return pred_mu, pred_sigma
 
     def propagate_uncertainty_certainty_equivalence(self, mu, sigma, action):
         """
