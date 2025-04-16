@@ -35,7 +35,35 @@ def collect_data_random_trajectory(env, num_trajectories=1000, trajectory_length
     """
     collected_data = None
     # --- Your code here
+    collected_data = []
+    for _ in range(num_trajectories):
+        state_temp = np.zeros((trajectory_length+1, 32, 32, 1), dtype=np.uint8)
+        action_temp = np.zeros((trajectory_length, 3), dtype=np.float32)
 
+        state = env.reset()
+        state_temp[0] = state
+        
+        valid = True
+        for j in range(trajectory_length):
+            action = env.action_space.sample()
+            action_temp[j] = action
+
+            next_state, _, done, _ = env.step(action)
+
+            if next_state.dtype != np.uint8:
+                next_state = (next_state * 255).astype(np.uint8)
+
+            state_temp[j+1] = next_state
+
+            if done:
+                valid = False
+                break
+            
+        if valid:
+            collected_data.append({
+            "states": state_temp,
+            "actions": action_temp
+        })
 
     # ---
     return collected_data
@@ -47,6 +75,7 @@ class NormalizationTransform(object):
         self.norm_constants = norm_constants
         self.mean = norm_constants['mean']
         self.std = norm_constants['std']
+        print(self.mean, self.std)
 
     def __call__(self, sample):
         """
@@ -55,8 +84,8 @@ class NormalizationTransform(object):
         :return:
         """
         # --- Your code here
-
-
+        states = sample['states']
+        sample['states'] = self.normalize_state(states)
         # ---
         return sample
 
@@ -67,8 +96,8 @@ class NormalizationTransform(object):
         :return:
         """
         # --- Your code here
-
-
+        states = sample['states']
+        sample['states'] = self.denormalize_state(states)
         # ---
         return sample
 
@@ -79,8 +108,7 @@ class NormalizationTransform(object):
         :return: <torch.tensor> of shape (..., num_channels, 32, 32)
         """
         # --- Your code here
-
-
+        state = (state - self.mean)/self.std
         # ---
         return state
 
@@ -91,8 +119,7 @@ class NormalizationTransform(object):
         :return: <torch.tensor> of shape (..., num_channels, 32, 32)
         """
         # --- Your code here
-
-
+        state = state_norm * self.std + self.mean
         # ---
         return state
 
@@ -136,8 +163,23 @@ def process_data_multiple_step(collected_data, batch_size=500, num_steps=4):
     #  2. Split dataset,
     #  3. Estimate normalization constants for the train dataset states.
     # --- Your code here
+    full_dataset = MultiStepDynamicsDataset(collected_data, num_steps=num_steps)
+    total_len = len(full_dataset)
+    train_len = int(0.8 * total_len)
+    val_len = total_len - train_len
+    
+    train_data, val_data = random_split(full_dataset, [train_len, val_len], generator=torch.Generator().manual_seed(42))
+    
+    all_states = torch.cat([sample['states'] for sample in train_data], dim=0)  # (N * (num_steps+1), C, H, W)
+    mean = all_states.mean()  # shape: (C,)
+    std = all_states.std() + 1e-6  # in case of 0
+    
+    normalization_constants = {
+        'mean':mean.item(),
+        'std': std.item()
+    }
 
-
+    
     # ---
     norm_tr = NormalizationTransform(normalization_constants)
     train_data.dataset.transform = norm_tr
@@ -187,8 +229,26 @@ class MultiStepDynamicsDataset(Dataset):
             'actions': None,
         }
         # --- Your code here
+        traj_idx = item // self.trajectory_length
+        step_idx = item % self.trajectory_length
 
+        traj = self.data[traj_idx]
+        states = torch.from_numpy(
+            traj["states"][step_idx: step_idx + self.num_steps + 1]
+        ).permute(0, 3, 1, 2).to(dtype=torch.float) / 255.0  # Normalize to [0,1]
 
+        actions = torch.from_numpy(
+            traj["actions"][step_idx: step_idx + self.num_steps]
+        ).to(dtype=torch.float)
+
+        sample = {
+            "states": states,
+            "actions": actions
+        }
+
+        if self.transform:
+            sample = self.transform(sample)
+            
         # ---
         return sample
 
