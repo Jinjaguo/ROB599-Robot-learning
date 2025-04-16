@@ -75,7 +75,6 @@ class NormalizationTransform(object):
         self.norm_constants = norm_constants
         self.mean = norm_constants['mean']
         self.std = norm_constants['std']
-        print(self.mean, self.std)
 
     def __call__(self, sample):
         """
@@ -271,8 +270,11 @@ class VAELoss(nn.Module):
         """
         loss = None
         # --- Your code here
-
-
+        recon_loss = F.mse_loss(x_hat, x, reduction='mean')
+        kl_div = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)  # shape: (batch_size,)
+        kl_loss = kl_div.mean()
+        
+        loss = recon_loss + self.beta * kl_loss
         # ---
         return loss
 
