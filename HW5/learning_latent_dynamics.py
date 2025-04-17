@@ -41,24 +41,20 @@ def collect_data_random_trajectory(env, num_trajectories=1000, trajectory_length
         action_temp = np.zeros((trajectory_length, 3), dtype=np.float32)
 
         state = env.reset()
-        state_temp[0] = state
+        state_temp[0,:,:,:] = state
         
         valid = True
         for j in range(trajectory_length):
-            action = env.action_space.sample()
-            action_temp[j] = action
-
+            action = env.action_space.sample().astype(np.float32)  # shape: (3,)
             next_state, _, done, _ = env.step(action)
 
-            if next_state.dtype != np.uint8:
-                next_state = (next_state * 255).astype(np.uint8)
-
-            state_temp[j+1] = next_state
+            state_temp[j + 1] = next_state
+            action_temp[j] = action
 
             if done:
                 valid = False
                 break
-            
+        
         if valid:
             collected_data.append({
             "states": state_temp,
@@ -118,7 +114,7 @@ class NormalizationTransform(object):
         :return: <torch.tensor> of shape (..., num_channels, 32, 32)
         """
         # --- Your code here
-        state = state_norm * self.std + self.mean
+        state = (state_norm * self.std) + self.mean
         # ---
         return state
 
@@ -168,15 +164,16 @@ def process_data_multiple_step(collected_data, batch_size=500, num_steps=4):
     val_len = total_len - train_len
     
     train_data, val_data = random_split(full_dataset, [train_len, val_len], generator=torch.Generator().manual_seed(42))
+    normalization_constants["mean"] = 0
+    normalization_constants["std"] = 0
     
-    all_states = torch.cat([sample['states'] for sample in train_data], dim=0)  # (N * (num_steps+1), C, H, W)
-    mean = all_states.mean()  # shape: (C,)
-    std = all_states.std() + 1e-6  # in case of 0
-    
-    normalization_constants = {
-        'mean':mean.item(),
-        'std': std.item()
-    }
+    for data in train_data:
+      states = data["states"]
+      normalization_constants["mean"] += states.mean()
+      normalization_constants["std"] += states.std()
+
+    normalization_constants["mean"] /= train_len
+    normalization_constants["std"] /= train_len
 
     
     # ---
@@ -229,17 +226,12 @@ class MultiStepDynamicsDataset(Dataset):
         }
         # --- Your code here
         traj_idx = item // self.trajectory_length
-        step_idx = item % self.trajectory_length
-
-        traj = self.data[traj_idx]
-        states = torch.from_numpy(
-            traj["states"][step_idx: step_idx + self.num_steps + 1]
-        ).permute(0, 3, 1, 2).to(dtype=torch.float) / 255.0  # Normalize to [0,1]
-
-        actions = torch.from_numpy(
-            traj["actions"][step_idx: step_idx + self.num_steps]
-        ).to(dtype=torch.float)
-
+        state_idx = item - ((self.trajectory_length)*(traj_idx))
+        action_idx = item - ((self.trajectory_length)*(traj_idx))
+        
+        states = torch.from_numpy(self.data[traj_idx]["states"][state_idx: state_idx+self.num_steps+1]).permute(0,3,1,2).to(dtype=torch.float)
+        actions = torch.from_numpy(self.data[traj_idx]["actions"][action_idx: action_idx+self.num_steps]).to(dtype=torch.float)
+ 
         sample = {
             "states": states,
             "actions": actions
@@ -271,8 +263,8 @@ class VAELoss(nn.Module):
         loss = None
         # --- Your code here
         recon_loss = F.mse_loss(x_hat, x, reduction='mean')
-        kl_div = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)  # shape: (batch_size,)
-        kl_loss = kl_div.mean()
+        kl_div = torch.log(1/torch.sqrt(torch.exp(logvar))) + (torch.exp(logvar) + mu**2)/2 - 1/2
+        kl_loss =torch.mean(torch.sum(kl_div, dim=1))
         
         loss = recon_loss + self.beta * kl_loss
         # ---
@@ -301,8 +293,9 @@ class MultiStepLoss(nn.Module):
         # compute reconstruction loss -- compares the encoded-decoded states with the original states
         rec_loss = 0.
         # --- Your code here
-
-
+        latent_values = model.encode(states)
+        reconstruction = model.decode(latent_values)
+        rec_loss = self.state_loss(reconstruction,states)
         # ---
         # propagate dynamics on latent space as well as reconstructed states
         pred_latent_values = []
@@ -313,8 +306,11 @@ class MultiStepLoss(nn.Module):
             next_z = None
             next_state = None
             # --- Your code here
+            next_z = model.latent_dynamics(prev_z,actions[:,t,:])
+            next_state = model(prev_state, actions[:,t,:])
 
-
+            pred_latent_values.append(next_z)
+            pred_states.append(next_state)
             # ---
             prev_z = next_z
             prev_state = next_state
@@ -323,13 +319,14 @@ class MultiStepLoss(nn.Module):
         # compute prediction loss -- compares predicted state values with the given states
         pred_loss = 0.
         # --- Your code here
-
+        pred_loss = self.state_loss(pred_states,states[:,1:])
 
         # ---
 
         # compute latent loss -- compares predicted latent values with the encoded latent values for states
         lat_loss = 0.
         # --- Your code here
+        lat_loss = self.latent_loss(pred_latent_values,latent_values[:,1:])
 
 
         # ---
@@ -352,8 +349,20 @@ class StateEncoder(nn.Module):
         self.latent_dim = latent_dim
         self.num_channels = num_channels
         # --- Your code here
-
-
+        self.conv_enc = nn.Sequential(
+            nn.Conv2d(self.num_channels, 4, kernel_size=5),  # (N, 4, H-4, W-4)
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),                                  # (N, 4, (H-4)//2, (W-4)//2)
+            nn.Conv2d(4, 4, kernel_size=5),                   # (N, 4, H-4-4, W-4-4)
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2)                                   # (N, 4, ...)
+        )
+        
+        self.linear_enc = nn.Sequential(
+            nn.Linear(100, 100),
+            nn.ReLU(inplace=True),
+            nn.Linear(100, self.latent_dim)
+        )
         # ---
 
     def forward(self, state):
@@ -365,8 +374,9 @@ class StateEncoder(nn.Module):
         input_shape = state.shape
         state = state.reshape(-1, self.num_channels, 32, 32)
         # --- Your code here
-
-
+        out = self.conv_enc(state) #should be (B,4,5,5)
+        out = out.view(out.size(0), -1) #should be (B,100)
+        latent_state = self.linear_enc(out) #should be (B,100)
         # ---
         # convert to original multi-batch shape
         latent_state = latent_state.reshape(*input_shape[:-3], self.latent_dim)
@@ -386,7 +396,22 @@ class StateVariationalEncoder(nn.Module):
         self.latent_dim = latent_dim
         self.num_channels = num_channels
         # --- Your code here
-
+        self.conv_enc = nn.Sequential(
+            nn.Conv2d(num_channels, 4, kernel_size=5),   # 32 → 28
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),                              # 28 → 14
+            nn.Conv2d(4, 4, kernel_size=5),               # 14 → 10
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2)                               # 10 → 5
+        )
+        
+        self.fc = nn.Sequential(
+            nn.Linear(100, 100),
+            nn.ReLU(inplace=True)
+        )
+        
+        self.fc_mu = nn.Linear(100, latent_dim)
+        self.fc_logvar = nn.Linear(100, latent_dim)
 
         # ---
 
@@ -402,8 +427,12 @@ class StateVariationalEncoder(nn.Module):
         input_shape = state.shape
         state = state.reshape(-1, self.num_channels, 32, 32)
         # --- Your code here
+        out = self.conv_enc(state)                # (B, 4, 5, 5)
+        out = out.view(out.size(0), -1)       # (B, 100)
+        out = self.fc(out)                    # (B, 100)
 
-
+        mu = self.fc_mu(out)                  # (B, latent_dim)
+        log_var = self.fc_logvar(out)         # (B, latent_dim)
         # ---
         # convert to original multi-batch shape
         mu = mu.reshape(*input_shape[:-3], self.latent_dim)
@@ -419,8 +448,9 @@ class StateVariationalEncoder(nn.Module):
         """
         sampled_latent_state = None
         # --- Your code here
-
-
+        std = torch.exp(0.5 * logvar)                 
+        eps = torch.randn_like(std)                   
+        sampled_latent_state = mu + std * eps                             
         # ---
         return sampled_latent_state
 
@@ -436,7 +466,13 @@ class StateDecoder(nn.Module):
         self.latent_dim = latent_dim
         self.num_channels = num_channels
         # --- Your code here
-
+        self.linear_dec = nn.Sequential(
+            nn.Linear(self.latent_dim, 500),      
+            nn.ReLU(inplace=True),
+            nn.Linear(500, 500),
+            nn.ReLU(inplace=True),
+            nn.Linear(500, self.num_channels * 32 * 32)
+            )
 
         # ---
 
@@ -450,7 +486,7 @@ class StateDecoder(nn.Module):
         latent_state = latent_state.reshape(-1, self.latent_dim)
 
         # --- Your code here
-
+        decoded_state = self.linear_dec(latent_state)
 
         # ---
 
@@ -484,7 +520,9 @@ class StateVAE(nn.Module):
         mu, log_var = None, None  # mean and log variance obtained from encoding state
         latent_state = None  # sample from the latent space feeded to the decoder
         # --- Your code here
-
+        mu, log_var = self.encoder(state)                      # Encode
+        latent_state = self.reparameterize(mu, log_var)        # Sample
+        reconstructed_state = self.decoder(latent_state)       # Decode
 
         # ---
         return reconstructed_state, mu, log_var, latent_state
@@ -496,8 +534,8 @@ class StateVAE(nn.Module):
         """
         latent_state = None
         # --- Your code here
-
-
+        mu, log_var = self.encoder(state)
+        latent_state = self.reparameterize(mu, log_var)
         # ---
         return latent_state
 
@@ -508,7 +546,7 @@ class StateVAE(nn.Module):
         """
         reconstructed_state = None
         # --- Your code here
-
+        reconstructed_state = self.decoder(latent_state)
 
         # ---
         return reconstructed_state
@@ -529,7 +567,6 @@ class LatentDynamicsModel(nn.Module):
     Latent dynamics model must be a Linear 3-layer network with 100 units in each layer and ReLU activations.
     The input to the latent_dynamics_model must be the latent states and actions concatentated along the last dimension.
     """
-
     def __init__(self, latent_dim, action_dim, num_channels=3):
         super().__init__()
         self.latent_dim = latent_dim
@@ -538,8 +575,16 @@ class LatentDynamicsModel(nn.Module):
         self.encoder = None
         self.decoder = None
         self.latent_dynamics_model = None
-        # --- Your code here
 
+        self.encoder = StateEncoder(self.latent_dim, self.num_channels)
+        self.decoder = StateDecoder(self.latent_dim, self.num_channels)
+        self.latent_dynamics_model = nn.Sequential(
+            nn.Linear(self.latent_dim + self.action_dim, 100),
+            nn.ReLU(),
+            nn.Linear(100, 100),
+            nn.ReLU(),
+            nn.Linear(100, self.latent_dim)
+        )
 
         # ---
 
@@ -552,8 +597,9 @@ class LatentDynamicsModel(nn.Module):
         """
         next_state = None
         # --- Your code here
-
-
+        zt = self.encode(state)
+        zt_1 = self.latent_dynamics(zt, action)
+        next_state = self.decode(zt_1)
         # ---
         return next_state
 
@@ -565,8 +611,7 @@ class LatentDynamicsModel(nn.Module):
         """
         latent_state = None
         # --- Your code here
-
-
+        latent_state = self.encoder(state)
         # ---
         return latent_state
 
@@ -578,8 +623,7 @@ class LatentDynamicsModel(nn.Module):
         """
         state = None
         # --- Your code here
-
-
+        state = self.decoder(latent_state)
         # ---
         return state
 
@@ -593,8 +637,7 @@ class LatentDynamicsModel(nn.Module):
         """
         next_latent_state = None
         # --- Your code here
-
-
+        next_latent_state = latent_state + self.latent_dynamics_model(torch.cat([latent_state, action],dim=-1))
         # ---
         return next_latent_state
 
@@ -609,8 +652,7 @@ def latent_space_pushing_cost_function(latent_state, action, target_latent_state
     """
     cost = None
     # --- Your code here
-
-
+    cost = torch.sum(torch.square(latent_state - target_latent_state),dim=1)
     # ---
     return cost
 
@@ -625,8 +667,7 @@ def img_space_pushing_cost_function(state, action, target_state):
     """
     cost = None
     # --- Your code here
-
-
+    cost = torch.mean(torch.square(state-target_state),dim=(1,2,3))
     # ---
     return cost
 
@@ -672,7 +713,9 @@ class PushingImgSpaceController(object):
         """
         next_state = None
         # --- Your code here
-
+        unwrap_state = self._unwrap_state(state)
+        next_state = self.model(unwrap_state,action)
+        next_state = self._wrap_state(next_state)
 
         # ---
         return next_state
@@ -687,7 +730,8 @@ class PushingImgSpaceController(object):
         """
         cost = None
         # --- Your code here
-
+        unwrap_state = self._unwrap_state(state)
+        cost = self.cost_function(unwrap_state, action, self.target_state_norm)
 
         # ---
         return cost
@@ -705,12 +749,10 @@ class PushingImgSpaceController(object):
         action = None
         state_tensor = None
         # --- Your code here
+        state_tensor = torch.as_tensor(state,dtype = torch.float32).permute(2,0,1)
 
-
-        # ---
         action_tensor = self.mppi.command(state_tensor)
-        # --- Your code here
-
+        action = action_tensor.detach().cpu().numpy()
 
         # ---
         return action
@@ -719,8 +761,12 @@ class PushingImgSpaceController(object):
         # convert state from shape (..., num_channels, height, width) to shape (..., num_channels*height*width)
         wrapped_state = None
         # --- Your code here
+        self.B = state.shape[0]
+        self.NC = state.shape[1]
+        self.H = state.shape[2]
+        self.W = state.shape[3]
 
-
+        wrapped_state = torch.flatten(state,start_dim=-3)
         # ---
         return wrapped_state
 
@@ -728,8 +774,7 @@ class PushingImgSpaceController(object):
         # convert state from shape (..., num_channels*height*width) to shape (..., num_channels, height, width)
         state = None
         # --- Your code here
-
-
+        state = wrapped_state.reshape(-1,*self.target_state.shape) #nc,h,w
         # ---
         return state
 
@@ -776,7 +821,7 @@ class PushingLatentController(object):
         """
         next_state = None
         # --- Your code here
-
+        next_state = self.model.latent_dynamics(state,action)
 
         # ---
         return next_state
@@ -791,7 +836,7 @@ class PushingLatentController(object):
         """
         cost = None
         # --- Your code here
-
+        cost = self.cost_function(state,action,self.latent_target_state)
 
         # ---
         return cost
@@ -809,12 +854,14 @@ class PushingLatentController(object):
         action = None
         state_tensor = None
         # --- Your code here
-
+        state = torch.as_tensor(state,dtype=torch.float32).permute(2,0,1)
+        state_norm = (state - self.norm_constants["mean"]) / self.norm_constants["std"]
+        state_tensor = self.model.encode(state_norm)
 
         # ---
-        action_tensor = self.mppi.command(latent_tensor)
+        action_tensor = self.mppi.command(state_tensor)
         # --- Your code here
-
+        action = action_tensor.detach().cpu().numpy()
 
         # ---
         return action
