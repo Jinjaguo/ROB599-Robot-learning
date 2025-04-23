@@ -226,8 +226,8 @@ class MultiStepDynamicsDataset(Dataset):
         }
         # --- Your code here
         traj_idx = item // self.trajectory_length
-        state_idx = item - ((self.trajectory_length)*(traj_idx))
-        action_idx = item - ((self.trajectory_length)*(traj_idx))
+        state_idx = item - (self.trajectory_length * traj_idx)
+        action_idx = item - (self.trajectory_length * traj_idx)
         
         states = torch.from_numpy(self.data[traj_idx]["states"][state_idx: state_idx+self.num_steps+1]).permute(0,3,1,2).to(dtype=torch.float)
         actions = torch.from_numpy(self.data[traj_idx]["actions"][action_idx: action_idx+self.num_steps]).to(dtype=torch.float)
@@ -349,20 +349,23 @@ class StateEncoder(nn.Module):
         self.latent_dim = latent_dim
         self.num_channels = num_channels
         # --- Your code here
-        self.conv_enc = nn.Sequential(
-            nn.Conv2d(self.num_channels, 4, kernel_size=5),  # (N, 4, H-4, W-4)
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2),                                  # (N, 4, (H-4)//2, (W-4)//2)
-            nn.Conv2d(4, 4, kernel_size=5),                   # (N, 4, H-4-4, W-4-4)
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2)                                   # (N, 4, ...)
-        )
-        
-        self.linear_enc = nn.Sequential(
-            nn.Linear(100, 100),
-            nn.ReLU(inplace=True),
-            nn.Linear(100, self.latent_dim)
-        )
+
+        # HARI #
+        sample_net_conv = [
+            nn.Conv2d(in_channels=self.num_channels, out_channels=4, kernel_size=5, stride=1, padding=0, dilation=1),
+            nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2),
+            nn.Conv2d(in_channels=4, out_channels=4, kernel_size=5, stride=1, padding=0, dilation=1),
+            nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2)]
+
+        # declaring the linear layers of encoder architecture
+        sample_net_fc = [nn.Linear(in_features=100, out_features=100), nn.ReLU(inplace=True),
+                         nn.Linear(in_features=100, out_features=self.latent_dim)]
+        # sample_net_fc.append(nn.ReLU(inplace=True))
+
+        # init layers
+        # not given any specific info on how to init the conv layers!
+        self.conv_enc = nn.Sequential(*sample_net_conv)
+        self.linear_enc = nn.Sequential(*sample_net_fc)
         # ---
 
     def forward(self, state):
@@ -374,9 +377,9 @@ class StateEncoder(nn.Module):
         input_shape = state.shape
         state = state.reshape(-1, self.num_channels, 32, 32)
         # --- Your code here
-        out = self.conv_enc(state) #should be (B,4,5,5)
-        out = out.view(out.size(0), -1) #should be (B,100)
-        latent_state = self.linear_enc(out) #should be (B,100)
+        out_feats = self.conv_enc(state)  # should be (B,4,5,5)
+        out = out_feats.flatten(1)  # should be (B,100)
+        latent_state = self.linear_enc(out)  # should be (B,100)
         # ---
         # convert to original multi-batch shape
         latent_state = latent_state.reshape(*input_shape[:-3], self.latent_dim)
@@ -396,23 +399,28 @@ class StateVariationalEncoder(nn.Module):
         self.latent_dim = latent_dim
         self.num_channels = num_channels
         # --- Your code here
-        self.conv_enc = nn.Sequential(
-            nn.Conv2d(num_channels, 4, kernel_size=5),   # 32 → 28
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2),                              # 28 → 14
-            nn.Conv2d(4, 4, kernel_size=5),               # 14 → 10
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(2)                               # 10 → 5
-        )
-        
-        self.fc = nn.Sequential(
-            nn.Linear(100, 100),
-            nn.ReLU(inplace=True)
-        )
-        
-        self.fc_mu = nn.Linear(100, latent_dim)
-        self.fc_logvar = nn.Linear(100, latent_dim)
 
+        # HARI #
+        sample_net_conv = [
+            nn.Conv2d(in_channels=self.num_channels, out_channels=4, kernel_size=5, stride=1, padding=0, dilation=1),
+            nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2),
+            nn.Conv2d(in_channels=4, out_channels=4, kernel_size=5, stride=1, padding=0, dilation=1),
+            nn.ReLU(inplace=True), nn.MaxPool2d(kernel_size=2)]
+
+        # declaring the linear layers of encoder architecture
+        sample_net_fc = [nn.Linear(in_features=100, out_features=100), nn.ReLU(inplace=True)]
+
+        # ModuleDict for using mu and log_var
+        self.dist = nn.ModuleDict({
+            'mu': nn.Linear(in_features=100, out_features=self.latent_dim),
+            'log_var': nn.Linear(in_features=100, out_features=self.latent_dim),
+            'relu': nn.ReLU(inplace=True)
+        })
+
+        # init layers
+        # not given any specific info on how to init the conv layers!
+        self.conv_enc = nn.Sequential(*sample_net_conv)
+        self.linear_enc = nn.Sequential(*sample_net_fc)
         # ---
 
     def forward(self, state):
@@ -427,12 +435,17 @@ class StateVariationalEncoder(nn.Module):
         input_shape = state.shape
         state = state.reshape(-1, self.num_channels, 32, 32)
         # --- Your code here
-        out = self.conv_enc(state)                # (B, 4, 5, 5)
-        out = out.view(out.size(0), -1)       # (B, 100)
-        out = self.fc(out)                    # (B, 100)
+        out_feats = self.conv_enc(state)  # should be (B,4,5,5)
+        out = out_feats.flatten(1)  # should be (B,100)
+        latent_state = self.linear_enc(out)  # should be (B,100)
 
-        mu = self.fc_mu(out)                  # (B, latent_dim)
-        log_var = self.fc_logvar(out)         # (B, latent_dim)
+        mu = self.dist['mu'](latent_state)  # should be of size (B,100)
+        # mu = self.dist['relu'](mean) #final mu should be again (B,100)
+
+        # linear outputs of mean and log var separately after passing
+        # through ReLU
+        log_var = self.dist['log_var'](latent_state)  # should be of size (B,100)
+        # log_var = self.dist['relu'](var) #should be of size (B,100)
         # ---
         # convert to original multi-batch shape
         mu = mu.reshape(*input_shape[:-3], self.latent_dim)
@@ -448,9 +461,14 @@ class StateVariationalEncoder(nn.Module):
         """
         sampled_latent_state = None
         # --- Your code here
-        std = torch.exp(0.5 * logvar)                 
-        eps = torch.randn_like(std)                   
-        sampled_latent_state = mu + std * eps                             
+        std = torch.exp(logvar)
+        std = torch.sqrt(std)
+        # eps = torch.randn_like(std)
+        eps = torch.randn(logvar.size())
+
+        # should be of size (B,100) again.
+        sampled_latent_state = mu + (eps * std)
+
         # ---
         return sampled_latent_state
 
@@ -567,6 +585,7 @@ class LatentDynamicsModel(nn.Module):
     Latent dynamics model must be a Linear 3-layer network with 100 units in each layer and ReLU activations.
     The input to the latent_dynamics_model must be the latent states and actions concatentated along the last dimension.
     """
+
     def __init__(self, latent_dim, action_dim, num_channels=3):
         super().__init__()
         self.latent_dim = latent_dim
@@ -575,16 +594,15 @@ class LatentDynamicsModel(nn.Module):
         self.encoder = None
         self.decoder = None
         self.latent_dynamics_model = None
-
+        # --- Your code here
         self.encoder = StateEncoder(self.latent_dim, self.num_channels)
         self.decoder = StateDecoder(self.latent_dim, self.num_channels)
         self.latent_dynamics_model = nn.Sequential(
-            nn.Linear(self.latent_dim + self.action_dim, 100),
-            nn.ReLU(),
-            nn.Linear(100, 100),
-            nn.ReLU(),
-            nn.Linear(100, self.latent_dim)
-        )
+                              nn.Linear(self.latent_dim + self.action_dim,100),
+                              nn.ReLU(),
+                              nn.Linear(100,100),
+                              nn.ReLU(),
+                              nn.Linear(100,self.latent_dim))
 
         # ---
 
@@ -637,7 +655,7 @@ class LatentDynamicsModel(nn.Module):
         """
         next_latent_state = None
         # --- Your code here
-        next_latent_state = latent_state + self.latent_dynamics_model(torch.cat([latent_state, action],dim=-1))
+        next_latent_state = latent_state + self.latent_dynamics_model(torch.cat([latent_state,action],dim=-1))
         # ---
         return next_latent_state
 
