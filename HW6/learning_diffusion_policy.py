@@ -162,7 +162,7 @@ class DiffusionPolicy:
         pred_noise = self.model(
             noisy_action,              # (B, pred_horizon, action_dim)
             timesteps,                 # (B,)
-            obs_cond                   # (B, obs_horizon*obs_dim)
+            global_cond=obs_cond                  # (B, obs_horizon*obs_dim)
         )
         
         loss = torch.nn.functional.mse_loss(pred_noise, noise)
@@ -187,7 +187,13 @@ class DiffusionPolicy:
 
             #################################
             #######  Your code here  ########
-
+            for t in self.noise_schedule.timesteps:
+                pred_noise = self.model(
+                    naction,  # (1, pred_horizon, action_dim)
+                    torch.full((1,), t, dtype=torch.long, device=self.device),
+                    global_cond=obs_cond  # (1, obs_horizon*obs_dim)
+                )
+                naction = self.noise_schedule.step(pred_noise, t, naction)
             #######  Your code finish  #######
             ##################################
         # (B, pred_horizon, action_dim)
